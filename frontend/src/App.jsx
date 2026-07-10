@@ -56,7 +56,15 @@ export default function App() {
 
   const [role, setRole] = useState(() => {
     const saved = localStorage.getItem("roleState");
-    return saved ? JSON.parse(saved) : null;
+    if (!saved) return null;
+
+    try {
+      return JSON.parse(saved);
+    } catch (error) {
+      console.warn("Ignoring invalid roleState in localStorage", error);
+      localStorage.removeItem("roleState");
+      return null;
+    }
   });
 
   const [usernameInput, setUsernameInput] = useState("");
@@ -643,7 +651,23 @@ export default function App() {
       );
     }
 
-    return null;
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-6 py-12">
+        <ContentCard className="w-full max-w-md p-8 text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Secure Encrypted Search System</h2>
+          <p className="text-sm text-gray-500 mb-6">
+            The saved session state was invalid, so the app reset to the landing screen.
+          </p>
+          <Button
+            variant="primary"
+            onClick={() => updateRoleState(null)}
+            className="w-full py-3"
+          >
+            Return to Start
+          </Button>
+        </ContentCard>
+      </div>
+    );
   };
 
   const isDashboardRole = role && (role.type === "internal" || role.type === "external" || role.type === "admin");

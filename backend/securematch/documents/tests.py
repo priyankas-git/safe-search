@@ -457,3 +457,135 @@ class AuditorProfileManagementTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
+class RESTfulAuditorTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        
+        self.admin_group, _ = Group.objects.get_or_create(name=Roles.ADMINISTRATOR)
+        self.compliance_group, _ = Group.objects.get_or_create(name=Roles.COMPLIANCE_OFFICER)
+        
+        self.admin = User.objects.create_user(username="rest_admin", password="password123")
+        self.admin.groups.add(self.admin_group)
+        
+        self.compliance = User.objects.create_user(username="rest_compliance", password="password123")
+        self.compliance.groups.add(self.compliance_group)
+        
+        self.auditor = Auditor.objects.create(
+            name="SBI REST Auditor",
+            email="sbi.rest@auditor.com",
+            phone="+919876543210",
+            designation="Senior REST Auditor",
+            status="ACTIVE",
+            public_key="some-key",
+            key_version=1
+        )
+
+    def test_list_auditors_success(self):
+        url = "/api/auditors/"
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertEqual(response.data["data"][0]["name"], "SBI REST Auditor")
+
+    def test_list_auditors_search_and_filter(self):
+        url = "/api/auditors/"
+        self.client.force_authenticate(user=self.admin)
+        
+        # Search query matching
+        response = self.client.get(url, {"search": "REST"})
+        self.assertEqual(len(response.data["data"]), 1)
+        
+        # Search query not matching
+        response = self.client.get(url, {"search": "Nonexistent"})
+        self.assertEqual(len(response.data["data"]), 0)
+        
+        # Status matching
+        response = self.client.get(url, {"status": "ACTIVE"})
+        self.assertEqual(len(response.data["data"]), 1)
+        
+        # Status not matching
+        response = self.client.get(url, {"status": "DISABLED"})
+        self.assertEqual(len(response.data["data"]), 0)
+
+    def test_create_auditor_restful(self):
+        url = "/api/auditors/"
+        self.client.force_authenticate(user=self.admin)
+        
+        payload = {
+            "name": "HDFC REST Auditor",
+            "email": "hdfc.rest@auditor.com",
+            "phone": "+919876543219",
+            "designation": "HDFC Specialist",
+            "status": "ACTIVE"
+        }
+        response = self.client.post(url, payload)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("private_key", response.data["data"])
+        self.assertIn("temporary_password", response.data["data"])
+        self.assertIn("username", response.data["data"])
+        self.assertEqual(response.data["data"]["name"], "HDFC REST Auditor")
+        
+        # Verify user account was created in DB
+        created_user = User.objects.get(username=response.data["data"]["username"])
+        self.assertTrue(created_user.groups.filter(name=Roles.EXTERNAL_AUDITOR).exists())
+        self.assertTrue(created_user.is_active)
+
+    def test_get_auditor_detail_restful(self):
+        url = f"/api/auditors/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["name"], "SBI REST Auditor")
+
+    def test_patch_auditor_detail_restful(self):
+        url = f"/api/auditors/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.admin)
+        
+        payload = {
+            "name": "SBI Updated REST Auditor",
+            "status": "DISABLED"
+        }
+        
+        # Create corresponding user to test status change deactivation
+        User.objects.create_user(username="auditor_sbi_rest_auditor", email="sbi.rest@auditor.com", is_active=True)
+        
+        response = self.client.patch(url, payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["name"], "SBI Updated REST Auditor")
+        self.assertEqual(response.data["data"]["status"], "DISABLED")
+        
+        # Verify corresponding user was deactivated
+        user = User.objects.get(username="auditor_sbi_rest_auditor")
+        self.assertFalse(user.is_active)
+
+    def test_delete_auditor_restful(self):
+        url = f"/api/auditors/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.admin)
+        
+        # Create user account to verify deletion
+        User.objects.create_user(username="auditor_sbi_rest_auditor", email="sbi.rest@auditor.com")
+        
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Auditor.objects.filter(id=self.auditor.id).exists())
+        self.assertFalse(User.objects.filter(username="auditor_sbi_rest_auditor").exists())
+
+    def test_rotate_key_restful(self):
+        url = f"/api/auditors/{self.auditor.id}/rotate-key/"
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("new_private_key", response.data["data"])
+        self.assertIn("new_public_key", response.data["data"])
+        self.assertEqual(response.data["data"]["new_key_version"], 2)
+
+    def test_download_credentials_restful(self):
+        url = f"/api/auditors/{self.auditor.id}/credentials/"
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+
+
+

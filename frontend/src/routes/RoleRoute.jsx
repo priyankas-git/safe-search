@@ -1,14 +1,10 @@
 import React from "react";
 import { useAuth } from "../context/AuthContext";
-import { hasAnyRole, getRoleFromUser } from "../config/permissions";
+import { hasAnyRole } from "../config/permissions";
 import { Spinner } from "../components/Loader";
 
 export default function RoleRoute({ children, allowedRoles, fallback = null }) {
   const { user, isAuthenticated, isLoading } = useAuth();
-
-  console.log(`[TEMP][RoleRoute] Current route: ${window.location.pathname}`);
-  console.log(`[TEMP][RoleRoute] AuthContext user:`, user);
-  console.log(`[TEMP][RoleRoute] RoleRoute role resolved: ${getRoleFromUser(user)}, allowedRoles: ${allowedRoles}, isAuthenticated: ${isAuthenticated}`);
 
   if (isLoading) {
     return (
@@ -19,7 +15,6 @@ export default function RoleRoute({ children, allowedRoles, fallback = null }) {
   }
 
   if (!isAuthenticated || !hasAnyRole(user, allowedRoles)) {
-    console.log(`[TEMP][RoleRoute] Access Denied. Redirecting to fallback.`);
     return fallback;
   }
 

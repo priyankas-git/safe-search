@@ -10,11 +10,15 @@ from .views import (
     ExternalMetricsView,
     CreateAuditorView,
     DeleteAuditorView,
-    HealthCheckView,
     DownloadAuditorCredentialsView,
     AuditorProfileRetrieveView,
     AuditorProfileUpdateView,
     AuditorStatusUpdateView,
+    AuditorListCreateView,
+    AuditorDetailView,
+    AuditorRotateKeyPathView,
+    AuditorCredentialsPathView,
+    HealthCheckView,
 )
 
 urlpatterns = [
@@ -33,5 +37,12 @@ urlpatterns = [
     path("auditor/<int:id>/", AuditorProfileRetrieveView.as_view()),
     path("auditor/<int:id>/update/", AuditorProfileUpdateView.as_view()),
     path("auditor/<int:id>/status/", AuditorStatusUpdateView.as_view()),
+    
+    # RESTful Auditor Endpoints
+    path("auditors/", AuditorListCreateView.as_view()),
+    path("auditors/<int:id>/", AuditorDetailView.as_view()),
+    path("auditors/<int:id>/rotate-key/", AuditorRotateKeyPathView.as_view()),
+    path("auditors/<int:id>/credentials/", AuditorCredentialsPathView.as_view()),
 ]
+
 

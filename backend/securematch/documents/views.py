@@ -42,7 +42,16 @@ from .serializers import (
     AuditorUpdateSerializer,
     AuditorStatusSerializer
 )
-
+from documents.services.auditor_service import (
+    create_auditor_with_identity,
+    update_auditor_status,
+)
+from documents.services.key_service import (
+    rotate_auditor_keys,
+)
+from documents.services.credential_service import (
+    generate_credential_pdf,
+)
 
 MAX_EXTERNAL_RESULTS = 50
 MAX_INTERNAL_RESULTS = 50
@@ -573,24 +582,23 @@ class RotateAuditorKeyView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Generate new keypair
-        private_key, public_key = generate_rsa_keypair()
-
-        # Rotate
-        auditor.public_key = public_key
-        auditor.key_version += 1
-        auditor.save()
-
-        return Response(
-            success_response(
-                data={
-                    "new_private_key": private_key,
-                    "new_public_key": public_key,
-                    "new_key_version": auditor.key_version
-                }
-            ),
-            status=status.HTTP_200_OK
-        )
+        try:
+            private_key, public_key, version = rotate_auditor_keys(auditor)
+            return Response(
+                success_response(
+                    data={
+                        "new_private_key": private_key,
+                        "new_public_key": public_key,
+                        "new_key_version": version
+                    }
+                ),
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                error_response("KEY_ROTATION_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
 class CreateAuditorView(APIView):
     permission_classes = [IsAuthenticated, IsSuperAdministrator]
@@ -604,27 +612,25 @@ class CreateAuditorView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Generate keypair
-        private_key, public_key = generate_rsa_keypair()
-
-        auditor = Auditor.objects.create(
-            name=name,
-            public_key=public_key,
-            key_version=1
-        )
-
-        return Response(
-            success_response(
-                data={
-                    "auditor_id": auditor.id,
-                    "name": auditor.name,
-                    "public_key": public_key,
-                    "private_key": private_key,  # Return only once
-                    "key_version": auditor.key_version
-                }
-            ),
-            status=status.HTTP_201_CREATED
-        )
+        try:
+            res = create_auditor_with_identity(name=name)
+            return Response(
+                success_response(
+                    data={
+                        "auditor_id": res["auditor"].id,
+                        "name": res["auditor"].name,
+                        "public_key": res["auditor"].public_key,
+                        "private_key": res["private_key"],
+                        "key_version": res["auditor"].key_version
+                    }
+                ),
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            return Response(
+                error_response("AUDITOR_CREATION_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class DeleteAuditorView(APIView):
     permission_classes = [IsAuthenticated, IsSuperAdministrator]
@@ -638,14 +644,265 @@ class DeleteAuditorView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        auditor.delete()
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            if auditor.email:
+                User.objects.filter(email=auditor.email).delete()
+            clean_name = "".join(c for c in auditor.name.lower() if c.isalnum() or c in "_-")
+            User.objects.filter(username__startswith=f"auditor_{clean_name}").delete()
+            
+            auditor.delete()
+            return Response(
+                success_response(
+                    data={"message": "Auditor deleted successfully"}
+                ),
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                error_response("AUDITOR_DELETE_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
+class AuditorListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsAdministrator()]
+        return [IsAuthenticated(), (IsAdministrator | IsComplianceOfficer)()]
+
+    def get(self, request):
+        try:
+            queryset = Auditor.objects.all()
+
+            search_query = request.query_params.get("search")
+            if search_query:
+                from django.db.models import Q
+                queryset = queryset.filter(
+                    Q(name__icontains=search_query) |
+                    Q(email__icontains=search_query) |
+                    Q(designation__icontains=search_query) |
+                    Q(phone__icontains=search_query)
+                )
+
+            status_filter = request.query_params.get("status")
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+
+            serializer = AuditorRetrieveSerializer(queryset, many=True)
+            return Response(
+                success_response(data=serializer.data),
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                error_response("AUDITOR_LIST_FAILED", f"Failed to retrieve auditors: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def post(self, request):
+        name = request.data.get("name")
+        email = request.data.get("email")
+        phone = request.data.get("phone")
+        designation = request.data.get("designation")
+        status_val = request.data.get("status", "ACTIVE")
+
+        if not name:
+            return Response(
+                error_response("MISSING_NAME", "Auditor name required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            if email and Auditor.objects.filter(email__iexact=email).exists():
+                return Response(
+                    error_response("VALIDATION_ERROR", "An auditor with this email already exists.", {"email": ["An auditor with this email already exists."]}),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if Auditor.objects.filter(name__iexact=name).exists():
+                return Response(
+                    error_response("VALIDATION_ERROR", "An auditor with this name already exists.", {"name": ["An auditor with this name already exists."]}),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            res = create_auditor_with_identity(
+                name=name,
+                email=email,
+                phone=phone,
+                designation=designation,
+                status=status_val
+            )
+            return Response(
+                success_response(
+                    data={
+                        "auditor_id": res["auditor"].id,
+                        "name": res["auditor"].name,
+                        "email": res["auditor"].email,
+                        "phone": res["auditor"].phone,
+                        "designation": res["auditor"].designation,
+                        "public_key": res["auditor"].public_key,
+                        "private_key": res["private_key"],
+                        "key_version": res["auditor"].key_version,
+                        "temporary_password": res["temporary_password"],
+                        "username": res["username"],
+                        "status": res["auditor"].status
+                    }
+                ),
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            return Response(
+                error_response("AUDITOR_CREATION_FAILED", f"Failed to create auditor: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class AuditorDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in ["PATCH", "PUT", "DELETE"]:
+            return [IsAuthenticated(), IsAdministrator()]
+        return [IsAuthenticated(), (IsAdministrator | IsComplianceOfficer)()]
+
+    def get(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = AuditorRetrieveSerializer(auditor)
         return Response(
-            success_response(
-                data={"message": "Auditor deleted successfully"}
-            ),
+            success_response(data=serializer.data),
             status=status.HTTP_200_OK
         )
+
+    def patch(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if "status" in request.data:
+            status_val = request.data["status"]
+            try:
+                update_auditor_status(auditor, status_val)
+            except Exception as e:
+                return Response(
+                    error_response("AUDITOR_STATUS_UPDATE_FAILED", str(e)),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        serializer = AuditorUpdateSerializer(auditor, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                error_response(
+                    code="VALIDATION_ERROR",
+                    message="Invalid request data.",
+                    details=serializer.errors
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer.save()
+        profile_serializer = AuditorRetrieveSerializer(auditor)
+        return Response(
+            success_response(data=profile_serializer.data),
+            status=status.HTTP_200_OK
+        )
+
+    def put(self, request, id):
+        return self.patch(request, id)
+
+    def delete(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            if auditor.email:
+                User.objects.filter(email=auditor.email).delete()
+            clean_name = "".join(c for c in auditor.name.lower() if c.isalnum() or c in "_-")
+            User.objects.filter(username__startswith=f"auditor_{clean_name}").delete()
+            
+            auditor.delete()
+            return Response(
+                success_response(data={"message": "Auditor deleted successfully"}),
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                error_response("AUDITOR_DELETE_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class AuditorRotateKeyPathView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministrator]
+
+    def post(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            private_key, public_key, version = rotate_auditor_keys(auditor)
+            return Response(
+                success_response(
+                    data={
+                        "new_private_key": private_key,
+                        "new_public_key": public_key,
+                        "new_key_version": version
+                    }
+                ),
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                error_response("KEY_ROTATION_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class AuditorCredentialsPathView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministrator]
+
+    def get(self, request, id):
+        from django.http import HttpResponse
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            pdf_bytes = generate_credential_pdf(auditor)
+            response = HttpResponse(pdf_bytes, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="SecureMatch_Auditor_Credentials.pdf"'
+            return response
+        except Exception as e:
+            return Response(
+                error_response("CREDENTIAL_GENERATION_FAILED", str(e)),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 
 class HealthCheckView(APIView):

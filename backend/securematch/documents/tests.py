@@ -187,3 +187,198 @@ class RBACTests(TestCase):
         self.assertEqual(response.data["data"]["status"], "healthy")
         self.assertEqual(response.data["data"]["database"], "up")
 
+
+class AuditorProfileManagementTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        # Resolve or create default groups
+        self.super_admin_group, _ = Group.objects.get_or_create(name=Roles.ADMINISTRATOR)
+        self.compliance_officer_group, _ = Group.objects.get_or_create(name=Roles.COMPLIANCE_OFFICER)
+        self.external_auditor_group, _ = Group.objects.get_or_create(name=Roles.EXTERNAL_AUDITOR)
+
+        # Create users
+        self.super_admin = User.objects.create_user(username="super_admin_prof", password="password123")
+        self.super_admin.groups.add(self.super_admin_group)
+
+        self.compliance_officer = User.objects.create_user(username="compliance_officer_prof", password="password123")
+        self.compliance_officer.groups.add(self.compliance_officer_group)
+
+        self.external_auditor = User.objects.create_user(username="external_auditor_prof", password="password123")
+        self.external_auditor.groups.add(self.external_auditor_group)
+
+        # Create initial test auditors
+        self.auditor = Auditor.objects.create(
+            name="SBI Auditor",
+            public_key="sbi-public-key-data",
+            email="sbi@auditor.com",
+            phone="+919876543210",
+            designation="Senior Auditor",
+            status="ACTIVE"
+        )
+        self.other_auditor = Auditor.objects.create(
+            name="ICICI Auditor",
+            public_key="icici-public-key-data",
+            email="icici@auditor.com",
+            phone="+919876543211",
+            designation="Junior Auditor",
+            status="ACTIVE"
+        )
+
+    # --------------------------------------------------
+    # Retrieve Profile Tests
+    # --------------------------------------------------
+    def test_retrieve_profile_success_admin(self):
+        url = f"/api/auditor/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "success")
+        data = response.data["data"]
+        self.assertEqual(data["id"], self.auditor.id)
+        self.assertEqual(data["name"], "SBI Auditor")
+        self.assertEqual(data["email"], "sbi@auditor.com")
+        self.assertEqual(data["status"], "ACTIVE")
+        self.assertEqual(data["public_key"], "sbi-public-key-data")
+        self.assertEqual(data["key_version"], 1)
+
+    def test_retrieve_profile_success_compliance_officer(self):
+        url = f"/api/auditor/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.compliance_officer)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "success")
+
+    def test_retrieve_profile_forbidden_external_auditor(self):
+        url = f"/api/auditor/{self.auditor.id}/"
+        self.client.force_authenticate(user=self.external_auditor)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_retrieve_profile_not_found(self):
+        url = "/api/auditor/99999/"
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["status"], "error")
+        self.assertEqual(response.data["error"]["code"], "AUDITOR_NOT_FOUND")
+
+    # --------------------------------------------------
+    # Update Profile Tests
+    # --------------------------------------------------
+    def test_update_profile_success_patch(self):
+        url = f"/api/auditor/{self.auditor.id}/update/"
+        self.client.force_authenticate(user=self.super_admin)
+        payload = {
+            "name": "SBI Updated Auditor",
+            "email": "sbi.new@auditor.com",
+            "phone": "+918888888888",
+            "designation": "Executive Auditor"
+        }
+        response = self.client.patch(url, payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "success")
+        data = response.data["data"]
+        self.assertEqual(data["name"], "SBI Updated Auditor")
+        self.assertEqual(data["email"], "sbi.new@auditor.com")
+        self.assertEqual(data["status"], "ACTIVE")  # Unaffected
+
+    def test_update_profile_success_put(self):
+        url = f"/api/auditor/{self.auditor.id}/update/"
+        self.client.force_authenticate(user=self.super_admin)
+        payload = {
+            "name": "SBI Put Auditor",
+            "email": "sbi.put@auditor.com",
+            "phone": "+917777777777",
+            "designation": "Lead Auditor"
+        }
+        response = self.client.put(url, payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["name"], "SBI Put Auditor")
+
+    def test_update_profile_ignores_read_only_fields(self):
+        url = f"/api/auditor/{self.auditor.id}/update/"
+        self.client.force_authenticate(user=self.super_admin)
+        payload = {
+            "name": "SBI Field Auditor",
+            "public_key": "hacked-public-key",
+            "key_version": 99,
+            "id": 9999
+        }
+        response = self.client.patch(url, payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.auditor.refresh_from_db()
+        self.assertEqual(self.auditor.name, "SBI Field Auditor")
+        self.assertEqual(self.auditor.public_key, "sbi-public-key-data")
+        self.assertEqual(self.auditor.key_version, 1)
+        self.assertNotEqual(self.auditor.id, 9999)
+
+    def test_update_profile_validation_errors(self):
+        url = f"/api/auditor/{self.auditor.id}/update/"
+        self.client.force_authenticate(user=self.super_admin)
+
+        # 1. Empty name
+        response = self.client.patch(url, {"name": ""})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["error"]["code"], "VALIDATION_ERROR")
+        self.assertIn("name", response.data["error"]["details"])
+
+        # 2. Min length name
+        response = self.client.patch(url, {"name": "ab"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data["error"]["details"])
+
+        # 3. Invalid email format
+        response = self.client.patch(url, {"email": "invalid-email"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data["error"]["details"])
+
+        # 4. Duplicate email
+        response = self.client.patch(url, {"email": "icici@auditor.com"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data["error"]["details"])
+
+        # 5. Duplicate name
+        response = self.client.patch(url, {"name": "ICICI Auditor"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data["error"]["details"])
+
+        # 6. Invalid phone format
+        response = self.client.patch(url, {"phone": "12345"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("phone", response.data["error"]["details"])
+
+    # --------------------------------------------------
+    # Status Management Tests
+    # --------------------------------------------------
+    def test_update_status_success(self):
+        url = f"/api/auditor/{self.auditor.id}/status/"
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.patch(url, {"status": "DISABLED"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "success")
+        self.assertEqual(response.data["data"]["status"], "DISABLED")
+        self.auditor.refresh_from_db()
+        self.assertEqual(self.auditor.status, "DISABLED")
+
+        # Set back to ACTIVE
+        response = self.client.patch(url, {"status": "ACTIVE"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["status"], "ACTIVE")
+
+    def test_update_status_invalid_value(self):
+        url = f"/api/auditor/{self.auditor.id}/status/"
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.patch(url, {"status": "PENDING"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["error"]["code"], "VALIDATION_ERROR")
+        self.assertIn("status", response.data["error"]["details"])
+
+    def test_update_status_forbidden_compliance_officer(self):
+        url = f"/api/auditor/{self.auditor.id}/status/"
+        self.client.force_authenticate(user=self.compliance_officer)
+        response = self.client.patch(url, {"status": "DISABLED"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+

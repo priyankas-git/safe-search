@@ -11,6 +11,9 @@ from .views import (
     CreateAuditorView,
     DeleteAuditorView,
     HealthCheckView,
+    AuditorProfileRetrieveView,
+    AuditorProfileUpdateView,
+    AuditorStatusUpdateView,
 )
 
 urlpatterns = [
@@ -23,8 +26,10 @@ urlpatterns = [
     path("auditor/<int:auditor_id>/logs/", AuditorLogsView.as_view()),
     path("metrics/internal/", InternalMetricsView.as_view()),
     path("metrics/external/", ExternalMetricsView.as_view()),
-    path("auditor/rotate-key/", RotateAuditorKeyView.as_view()),
     path("auditor/create/", CreateAuditorView.as_view()),
     path("auditor/<int:auditor_id>/delete/", DeleteAuditorView.as_view()),
+    path("auditor/<int:id>/", AuditorProfileRetrieveView.as_view()),
+    path("auditor/<int:id>/update/", AuditorProfileUpdateView.as_view()),
+    path("auditor/<int:id>/status/", AuditorStatusUpdateView.as_view()),
 ]
 

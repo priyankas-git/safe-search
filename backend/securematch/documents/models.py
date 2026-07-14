@@ -53,13 +53,27 @@ class SearchTokenIndex(models.Model):
 # ---------------------------------------------------
 
 class Auditor(models.Model):
+    STATUS_CHOICES = (
+        ("ACTIVE", "Active"),
+        ("DISABLED", "Disabled")
+    )
+
     name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True, null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    designation = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default="ACTIVE"
+    )
     public_key = models.TextField()
 
     # 🔁 Key Rotation Support
     key_version = models.IntegerField(default=1)
 
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["id"]

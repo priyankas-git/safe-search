@@ -37,6 +37,11 @@ from documents.models import (
 
 from .constants import SEARCHABLE_FIELDS
 from .utils import success_response, error_response
+from .serializers import (
+    AuditorRetrieveSerializer,
+    AuditorUpdateSerializer,
+    AuditorStatusSerializer
+)
 
 
 MAX_EXTERNAL_RESULTS = 50
@@ -677,4 +682,199 @@ class HealthCheckView(APIView):
                 ),
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
+
+
+class AuditorProfileRetrieveView(APIView):
+    """
+    GET /api/auditor/<id>/
+
+    Success: 200
+    {
+        "status": "success",
+        "data": {
+            "id": 1,
+            "name": "SBI Auditor",
+            "email": "sbi@auditor.com",
+            "phone": "+919876543210",
+            "designation": "Senior Auditor",
+            "public_key": "...",
+            "key_version": 1,
+            "status": "ACTIVE",
+            "created_at": "2026-07-14T08:00:00Z",
+            "updated_at": "2026-07-14T08:00:00Z"
+        },
+        "meta": {}
+    }
+
+    Errors: 404 AUDITOR_NOT_FOUND, 500 AUDITOR_PROFILE_RETRIEVE_FAILED
+    """
+    permission_classes = [IsAuthenticated, IsSuperAdministrator | IsComplianceOfficer]
+
+    def get(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response(
+                    code="AUDITOR_NOT_FOUND",
+                    message="Auditor not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception:
+            return Response(
+                error_response(
+                    code="AUDITOR_PROFILE_RETRIEVE_FAILED",
+                    message="Failed to retrieve auditor profile"
+                ),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        serializer = AuditorRetrieveSerializer(auditor)
+        return Response(
+            success_response(data=serializer.data),
+            status=status.HTTP_200_OK
+        )
+
+
+class AuditorProfileUpdateView(APIView):
+    """
+    PUT/PATCH /api/auditor/<id>/update/
+
+    Request body:
+    {
+        "name": "SBI Auditor",
+        "email": "sbi@auditor.com",
+        "phone": "+919876543210",
+        "designation": "Senior Auditor"
+    }
+
+    Editable fields: name, email, phone, designation.
+    Ignored read-only fields: id, public_key, key_version, created_at, updated_at, status.
+
+    Success: 200 with AuditorRetrieveSerializer response.
+    Errors: 400 VALIDATION_ERROR, 404 AUDITOR_NOT_FOUND, 500 AUDITOR_PROFILE_UPDATE_FAILED
+    """
+    permission_classes = [IsAuthenticated, IsSuperAdministrator]
+
+    def patch(self, request, id):
+        return self._update(request, id, partial=True)
+
+    def put(self, request, id):
+        return self._update(request, id, partial=False)
+
+    def _update(self, request, id, partial):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response(
+                    code="AUDITOR_NOT_FOUND",
+                    message="Auditor not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = AuditorUpdateSerializer(
+            auditor,
+            data=request.data,
+            partial=partial
+        )
+        if not serializer.is_valid():
+            return Response(
+                error_response(
+                    code="VALIDATION_ERROR",
+                    message="Invalid request data.",
+                    details=serializer.errors
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            auditor = serializer.save()
+        except Exception:
+            return Response(
+                error_response(
+                    code="AUDITOR_PROFILE_UPDATE_FAILED",
+                    message="Failed to update auditor profile"
+                ),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        profile_serializer = AuditorRetrieveSerializer(auditor)
+        return Response(
+            success_response(data=profile_serializer.data),
+            status=status.HTTP_200_OK
+        )
+
+
+class AuditorStatusUpdateView(APIView):
+    """
+    PATCH /api/auditor/<id>/status/
+
+    Request body:
+    {
+        "status": "DISABLED"
+    }
+
+    Supported status values: ACTIVE, DISABLED.
+
+    Success: 200
+    {
+        "status": "success",
+        "data": {
+            "auditor_id": 1,
+            "status": "DISABLED"
+        },
+        "meta": {}
+    }
+
+    Errors: 400 VALIDATION_ERROR, 404 AUDITOR_NOT_FOUND, 500 AUDITOR_STATUS_UPDATE_FAILED
+    """
+    permission_classes = [IsAuthenticated, IsSuperAdministrator]
+
+    def patch(self, request, id):
+        try:
+            auditor = Auditor.objects.get(id=id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response(
+                    code="AUDITOR_NOT_FOUND",
+                    message="Auditor not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = AuditorStatusSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                error_response(
+                    code="VALIDATION_ERROR",
+                    message="Invalid request data.",
+                    details=serializer.errors
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            auditor.status = serializer.validated_data["status"]
+            auditor.save(update_fields=["status", "updated_at"])
+        except Exception:
+            return Response(
+                error_response(
+                    code="AUDITOR_STATUS_UPDATE_FAILED",
+                    message="Failed to update auditor status"
+                ),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response(
+            success_response(
+                data={
+                    "auditor_id": auditor.id,
+                    "status": auditor.status
+                }
+            ),
+            status=status.HTTP_200_OK
+        )
 

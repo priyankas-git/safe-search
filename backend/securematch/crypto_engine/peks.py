@@ -142,3 +142,21 @@ def generate_rsa_keypair():
     )
 
     return private_pem.decode(), public_pem.decode()
+
+
+def get_public_key_fingerprint(public_pem: str) -> str:
+    """
+    Generate SHA-256 fingerprint of the public key (using its DER SubjectPublicKeyInfo format).
+    """
+    try:
+        public_key = serialization.load_pem_public_key(
+            public_pem.encode(),
+            backend=default_backend()
+        )
+        der_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        return hashlib.sha256(der_bytes).hexdigest()
+    except Exception:
+        return hashlib.sha256(public_pem.strip().encode()).hexdigest()

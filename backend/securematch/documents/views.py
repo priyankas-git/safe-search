@@ -678,3 +678,44 @@ class HealthCheckView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
+
+class DownloadAuditorCredentialsView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdministrator | IsExternalAuditor]
+
+    def get(self, request, auditor_id):
+        from django.http import HttpResponse
+        from .pdf_generator import generate_credential_pdf
+
+        try:
+            auditor = Auditor.objects.get(id=auditor_id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        pdf_bytes = generate_credential_pdf(auditor)
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="auditor_{auditor.id}_credentials.pdf"'
+        return response
+
+    def post(self, request, auditor_id):
+        from django.http import HttpResponse
+        from .pdf_generator import generate_credential_pdf
+
+        try:
+            auditor = Auditor.objects.get(id=auditor_id)
+        except Auditor.DoesNotExist:
+            return Response(
+                error_response("AUDITOR_NOT_FOUND", "Auditor not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        private_key = None
+        if isinstance(request.data, dict):
+            private_key = request.data.get("private_key")
+
+        pdf_bytes = generate_credential_pdf(auditor, private_key=private_key)
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="auditor_{auditor.id}_credentials.pdf"'
+        return response

@@ -11,3 +11,4 @@ sqlparse
 gunicorn
 whitenoise
 djangorestframework-simplejwt
+reportlab
